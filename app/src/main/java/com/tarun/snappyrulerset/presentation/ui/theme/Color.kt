@@ -1,4 +1,4 @@
-package com.tarun.snappyrulerset.ui.theme
+package com.tarun.snappyrulerset.presentation.theme
 
 import androidx.compose.ui.graphics.Color
 

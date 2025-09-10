@@ -1,6 +1,5 @@
-package com.tarun.snappyrulerset.ui.theme
+package com.tarun.snappyrulerset.presentation.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
