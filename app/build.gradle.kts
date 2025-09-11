@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.plugin)
     id("kotlin-kapt")
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.2.20"
 }
 
 android {
@@ -58,6 +59,9 @@ dependencies {
     implementation(libs.androidx.hilt.navigation.compose)
     implementation (libs.hilt.android)
     kapt (libs.hilt.compiler)
+
+    //json
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

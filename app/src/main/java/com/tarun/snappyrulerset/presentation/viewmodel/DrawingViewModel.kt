@@ -1,102 +1,164 @@
 package com.tarun.snappyrulerset.presentation.viewmodel
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.tarun.snappyrulerset.domain.model.DrawingUiState
-import com.tarun.snappyrulerset.domain.model.Point
-import com.tarun.snappyrulerset.domain.model.Polyline
-import com.tarun.snappyrulerset.domain.model.Shape
-import com.tarun.snappyrulerset.domain.snap.SnapEngine
-import com.tarun.snappyrulerset.domain.usecase.LoadDrawingUseCase
-import com.tarun.snappyrulerset.domain.usecase.SaveDrawingUseCase
-import com.tarun.snappyrulerset.utils.UndoRedo
+import com.tarun.snappyrulerset.domain.model.*
+import com.tarun.snappyrulerset.domain.model.state.*
+import com.tarun.snappyrulerset.domain.repository.DrawingRepository
+import com.tarun.snappyrulerset.domain.usecase.ExportDrawingUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
-import javax.inject.Inject
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.util.UUID
+import javax.inject.Inject
+import kotlin.math.max
 
 
 @HiltViewModel
 class DrawingViewModel @Inject constructor(
-    private val saveDrawing: SaveDrawingUseCase,
-    private val loadDrawing: LoadDrawingUseCase,
-    private val snapEngine: SnapEngine,
+    private val exportUseCase: ExportDrawingUseCase,
+    private val repo: DrawingRepository
 ) : ViewModel() {
 
-
     private val _state = MutableStateFlow(DrawingUiState())
-    val state: StateFlow<DrawingUiState> = _state
+    val state: StateFlow<DrawingUiState> = _state.asStateFlow()
 
+    private val _message = MutableSharedFlow<String>()
+    val message = _message.asSharedFlow()
 
-    private val history = UndoRedo<DrawingUiState>()
+    private val undoStack = ArrayDeque<DrawingUiState>()
+    private val redoStack = ArrayDeque<DrawingUiState>()
+    private val maxHistory = 20
 
+    // zoom + pan used to derive snap radius; expose zoom for other modules if needed
+    private var _zoom = 1f
+    val zoom get() = _zoom
+    private var panX = 0f
+    private var panY = 0f
 
-    init { load() }
-
-
-    fun load() = viewModelScope.launch {
-        val shapes = loadDrawing()
-        _state.update { it.copy(shapes = shapes) }
-    }
-
-    fun save() = viewModelScope.launch { saveDrawing(_state.value.shapes) }
-
-    fun onDown(raw: Point) {
-        history.push(_state.value)
-        _state.update { it.copy(currentPolyline = listOf(raw)) }
-    }
-
-
-    fun onMove(raw: Point) {
-        val snapped =
-            snapEngine.snap(
-                raw = raw,
-                zoom = _state.value.zoom,
-                points = collectSnapPoints(),
-                angleLine = null
-            )
-        _state.update {
-            val pts = it.currentPolyline + snapped.snapped
-            it.copy(
-                currentPolyline = pts,
-                hudText = "len: ${pts.size}"
-            )
+    // --- Tool selection + initialization ---
+    fun selectTool(tool: ActiveTool) {
+        pushUndo()
+        _state.update { cur ->
+            when (tool) {
+                ActiveTool.RULER -> cur.copy(activeTool = tool, rulerState = cur.rulerState ?: RulerState(Point(400f, 400f), angle = 0F))
+                ActiveTool.SET_SQUARE -> cur.copy(activeTool = tool, setSquareState = cur.setSquareState ?: SetSquareState(Point(600f, 400f), angle = 0F, size = 200F))
+                ActiveTool.PROTRACTOR -> cur.copy(activeTool = tool, protractorState = cur.protractorState ?: ProtractorState(Point(500f, 600f), angle = 0F))
+                ActiveTool.COMPASS -> cur.copy(activeTool = tool, compassState = cur.compassState ?: CompassState(Point(500f,800f), radius = 100f))
+                else -> cur.copy(activeTool = tool)
+            }
         }
     }
 
+    // --- Ruler / SetSquare ---
+    fun moveRuler(newPos: Point) = _state.update { it.copy(rulerState = it.rulerState?.copy(position = newPos) ?: RulerState(newPos)) }
+    fun rotateRuler(newAngle: Float) = _state.update { it.copy(rulerState = it.rulerState?.copy(angle = newAngle)) }
+    fun moveSetSquare(newPos: Point) = _state.update { it.copy(setSquareState = it.setSquareState?.copy(position = newPos) ?: SetSquareState(newPos, angle = 0F, size = 200F)) }
+    fun rotateSetSquare(newAngle: Float) = _state.update { it.copy(setSquareState = it.setSquareState?.copy(angle = newAngle)) }
 
+    // --- Compass adjustments (new) ---
+    fun moveCompass(newCenter: Point) = _state.update { it.copy(compassState = it.compassState?.copy(center = newCenter) ?: CompassState(newCenter, radius = 100f) )}
+    fun setCompassRadius(newRadius: Float) = _state.update { it.copy(compassState = it.compassState?.copy(radius = newRadius)) }
+    fun adjustCompassRadiusBy(factor: Float) {
+        _state.update {
+            val current = it.compassState ?: CompassState(Point(500f, 800f), radius = 100f)
+            val next = (current.radius * factor).coerceIn(10f, 2000f)
+            it.copy(compassState = current.copy(radius = next))
+        }
+    }
+
+    // --- Protractor adjustments (we keep rotate and position) ---
+    fun moveProtractor(newPos: Point) = _state.update { it.copy(protractorState = it.protractorState?.copy(position = newPos) ?: ProtractorState(newPos, angle = 0F)) }
+    fun rotateProtractor(newAngle: Float) = _state.update { it.copy(protractorState = it.protractorState?.copy(angle = newAngle)) }
+
+    // --- Zoom / Pan ---
+    fun zoomBy(factor: Float) {
+        _state.update { current ->
+            current.copy(zoomLevel = current.zoomLevel * factor)
+        }
+    }
+    fun panBy(dx: Float, dy: Float) { panX += dx; panY += dy }
+
+    // --- Drawing ---
+    fun onDown(p: Point) { pushUndo(); _state.update { it.copy(currentPolyline = listOf(p)) } }
+    fun onMove(p: Point) { _state.update { it.copy(currentPolyline = it.currentPolyline + p) } }
     fun onUp() {
-        val pts = _state.value.currentPolyline
-        if (pts.size >= 2) {
-            val shape: Shape = Polyline(id = UUID.randomUUID().toString(), points = pts)
-            _state.update { it.copy(shapes = it.shapes + shape, currentPolyline = emptyList()) }
+        val cur = _state.value.currentPolyline
+        if (cur.size >= 2) {
+            _state.update { it.copy(shapes = it.shapes + Polyline("LINE",cur), currentPolyline = emptyList()) }
         } else {
             _state.update { it.copy(currentPolyline = emptyList()) }
         }
     }
 
+    // --- Undo / Redo ---
+    fun undo() {
+        if (undoStack.isNotEmpty()) {
+            val prev = undoStack.removeLast()
+            redoStack.addLast(_state.value)
+            _state.value = prev
+        } else messageEmit("Nothing to undo")
+    }
+    fun redo() {
+        if (redoStack.isNotEmpty()) {
+            val next = redoStack.removeLast()
+            undoStack.addLast(_state.value)
+            _state.value = next
+        } else messageEmit("Nothing to redo")
+    }
 
-    fun undo() { history.undo(_state.value)?.let { _state.value = it } }
-    fun redo() { history.redo(_state.value)?.let { _state.value = it } }
-    fun zoomBy(f: Float) { _state.update { it.copy(zoom = (it.zoom * f).coerceIn(0.25f, 4f)) } }
-    fun panBy(dx: Float, dy: Float) { _state.update { it.copy(panX = it.panX + dx, panY = it.panY + dy) } }
-
-
-    private fun collectSnapPoints(): List<Point> = buildList {
-        _state.value.shapes.forEach { shape ->
-            when (shape) {
-                is Polyline -> {
-                    addAll(shape.points)
-                    shape.points.windowed(2).forEach { pair -> add(midPoint(pair[0], pair[1])) }
-                }
-                else -> Unit
-            }
+    fun updateRulerLength(newLength: Float) {
+        _state.update { current ->
+            val ruler = current.rulerState
+            if (ruler != null) current.copy(
+                rulerState = ruler.copy(length = newLength)
+            ) else current
         }
     }
 
+    fun updateProtractorAngle(newAngle: Float) {
+        _state.update { current ->
+            val protractor = current.protractorState
+            if (protractor != null) current.copy(
+                protractorState = protractor.copy(angle = newAngle)
+            ) else current
+        }
+    }
 
-    private fun midPoint(a: Point, b: Point) = Point((a.x + b.x) / 2f, (a.y + b.y) / 2f)
+    fun updateCompassRadius(newRadius: Float) {
+        _state.update { current ->
+            val compass = current.compassState
+            if (compass != null) current.copy(
+                compassState = compass.copy(radius = newRadius)
+            ) else current
+        }
+    }
+
+    fun updateSetSquareSize(newSize: Float) {
+        _state.update { current ->
+            val setSquare = current.setSquareState
+            if (setSquare != null) current.copy(
+                setSquareState = setSquare.copy(size = newSize)
+            ) else current
+        }
+    }
+
+    private fun pushUndo() {
+        undoStack.addLast(_state.value.copy())
+        if (undoStack.size > maxHistory) undoStack.removeFirst()
+        redoStack.clear()
+    }
+
+    // dynamic snap radius (uses current zoom)
+    fun currentSnapRadiusPx(): Float = max(8f, 40f / _zoom)
+
+    fun messageEmit(msg: String) = viewModelScope.launch { _message.emit(msg) }
+
+    // --- Export ---
+    suspend fun exportBitmap(): Uri? {
+        return repo.exportDrawing(_state.value.shapes).apply {
+            messageEmit("Exported")
+        }
+    }
 }

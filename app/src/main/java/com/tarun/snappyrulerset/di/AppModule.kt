@@ -1,13 +1,13 @@
 package com.tarun.snappyrulerset.di
 
+import android.content.Context
 import com.tarun.snappyrulerset.data.repository.DrawingRepositoryImpl
 import com.tarun.snappyrulerset.domain.repository.DrawingRepository
-import com.tarun.snappyrulerset.domain.snap.SnapEngine
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import javax.inject.Singleton
 
 
 @Module
@@ -15,9 +15,6 @@ import javax.inject.Singleton
 object AppModule {
 
     @Provides
-    @Singleton
-    fun provideSnapEngine(): SnapEngine = SnapEngine()
-
-    @Provides
-    fun provideDrawingRepositoryImpl(): DrawingRepository = DrawingRepositoryImpl()
+    fun provideDrawingRepositoryImpl(@ApplicationContext context: Context): DrawingRepository =
+        DrawingRepositoryImpl(context = context)
 }
