@@ -1,6 +1,5 @@
 package com.tarun.snappyrulerset.presentation.viewmodel
 
-import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -14,7 +13,6 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import kotlin.math.max
 
-
 @HiltViewModel
 class DrawingViewModel @Inject constructor(
     private val exportUseCase: ExportDrawingUseCase,
@@ -24,75 +22,104 @@ class DrawingViewModel @Inject constructor(
     private val _state = MutableStateFlow(DrawingUiState())
     val state: StateFlow<DrawingUiState> = _state.asStateFlow()
 
-    private val _message = MutableSharedFlow<String>()
-    val message = _message.asSharedFlow()
+    private val _message = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val message: SharedFlow<String> = _message
+
+    private val _share = MutableSharedFlow<Uri>(extraBufferCapacity = 1)
+    val share: SharedFlow<Uri> = _share
 
     private val undoStack = ArrayDeque<DrawingUiState>()
     private val redoStack = ArrayDeque<DrawingUiState>()
     private val maxHistory = 20
 
-    // zoom + pan used to derive snap radius; expose zoom for other modules if needed
     private var _zoom = 1f
-    val zoom get() = _zoom
+    val zoom: Float get() = _zoom
     private var panX = 0f
     private var panY = 0f
 
-    // --- Tool selection + initialization ---
+    // --- Tool selection ---
     fun selectTool(tool: ActiveTool) {
         pushUndo()
         _state.update { cur ->
             when (tool) {
-                ActiveTool.RULER -> cur.copy(activeTool = tool, rulerState = cur.rulerState ?: RulerState(Point(400f, 400f), angle = 0F))
-                ActiveTool.SET_SQUARE -> cur.copy(activeTool = tool, setSquareState = cur.setSquareState ?: SetSquareState(Point(600f, 400f), angle = 0F, size = 200F))
-                ActiveTool.PROTRACTOR -> cur.copy(activeTool = tool, protractorState = cur.protractorState ?: ProtractorState(Point(500f, 600f), angle = 0F))
-                ActiveTool.COMPASS -> cur.copy(activeTool = tool, compassState = cur.compassState ?: CompassState(Point(500f,800f), radius = 100f))
+                ActiveTool.RULER -> cur.copy(activeTool = tool, rulerState = cur.rulerState ?: RulerState(Point(400f, 400f), 0f))
+                ActiveTool.SET_SQUARE -> cur.copy(activeTool = tool, setSquareState = cur.setSquareState ?: SetSquareState(Point(600f, 400f), 0f, size = 200f))
+                ActiveTool.PROTRACTOR -> cur.copy(activeTool = tool, protractorState = cur.protractorState ?: ProtractorState(Point(500f, 600f), angle = 0f))
+                ActiveTool.COMPASS -> cur.copy(activeTool = tool, compassState = cur.compassState ?: CompassState(Point(500f, 800f), 100f))
                 else -> cur.copy(activeTool = tool)
             }
         }
     }
 
-    // --- Ruler / SetSquare ---
-    fun moveRuler(newPos: Point) = _state.update { it.copy(rulerState = it.rulerState?.copy(position = newPos) ?: RulerState(newPos)) }
-    fun rotateRuler(newAngle: Float) = _state.update { it.copy(rulerState = it.rulerState?.copy(angle = newAngle)) }
-    fun moveSetSquare(newPos: Point) = _state.update { it.copy(setSquareState = it.setSquareState?.copy(position = newPos) ?: SetSquareState(newPos, angle = 0F, size = 200F)) }
-    fun rotateSetSquare(newAngle: Float) = _state.update { it.copy(setSquareState = it.setSquareState?.copy(angle = newAngle)) }
-
-    // --- Compass adjustments (new) ---
-    fun moveCompass(newCenter: Point) = _state.update { it.copy(compassState = it.compassState?.copy(center = newCenter) ?: CompassState(newCenter, radius = 100f) )}
-    fun setCompassRadius(newRadius: Float) = _state.update { it.copy(compassState = it.compassState?.copy(radius = newRadius)) }
-    fun adjustCompassRadiusBy(factor: Float) {
-        _state.update {
-            val current = it.compassState ?: CompassState(Point(500f, 800f), radius = 100f)
-            val next = (current.radius * factor).coerceIn(10f, 2000f)
-            it.copy(compassState = current.copy(radius = next))
-        }
+    // --- HUD update functions (used by ToolHudPanel) ---
+    fun updateRulerLength(newLength: Float) = updateTool {
+        it.copy(rulerState = it.rulerState?.copy(length = newLength))
     }
 
-    // --- Protractor adjustments (we keep rotate and position) ---
-    fun moveProtractor(newPos: Point) = _state.update { it.copy(protractorState = it.protractorState?.copy(position = newPos) ?: ProtractorState(newPos, angle = 0F)) }
-    fun rotateProtractor(newAngle: Float) = _state.update { it.copy(protractorState = it.protractorState?.copy(angle = newAngle)) }
-
-    // --- Zoom / Pan ---
-    fun zoomBy(factor: Float) {
-        _state.update { current ->
-            current.copy(zoomLevel = current.zoomLevel * factor)
-        }
+    fun updateProtractorAngle(newAngle: Float) = updateTool {
+        it.copy(protractorState = it.protractorState?.copy(angle = newAngle))
     }
-    fun panBy(dx: Float, dy: Float) { panX += dx; panY += dy }
 
-    // --- Drawing ---
-    fun onDown(p: Point) { pushUndo(); _state.update { it.copy(currentPolyline = listOf(p)) } }
-    fun onMove(p: Point) { _state.update { it.copy(currentPolyline = it.currentPolyline + p) } }
+    fun updateCompassRadius(newRadius: Float) = updateTool {
+        it.copy(compassState = it.compassState?.copy(radius = newRadius))
+    }
+
+    fun updateSetSquareSize(newSize: Float) = updateTool {
+        it.copy(setSquareState = it.setSquareState?.copy(size = newSize))
+    }
+
+    // --- Tool moves / transformations ---
+    fun moveRuler(newPos: Point) = updateTool {
+        it.copy(rulerState = it.rulerState?.copy(position = newPos) ?: RulerState(newPos))
+    }
+    fun rotateRuler(newAngle: Float) = updateTool {
+        it.copy(rulerState = it.rulerState?.copy(angle = newAngle))
+    }
+
+    fun moveSetSquare(newPos: Point) = updateTool {
+        it.copy(setSquareState = it.setSquareState?.copy(position = newPos) ?: SetSquareState(newPos, 0f, size = 200f))
+    }
+    fun rotateSetSquare(newAngle: Float) = updateTool {
+        it.copy(setSquareState = it.setSquareState?.copy(angle = newAngle))
+    }
+
+    fun moveCompass(newCenter: Point) = updateTool {
+        it.copy(compassState = it.compassState?.copy(center = newCenter) ?: CompassState(newCenter, 100f))
+    }
+    fun adjustCompassRadiusBy(factor: Float) = updateTool {
+        val current = it.compassState ?: CompassState(Point(500f, 800f), 100f)
+        val next = (current.radius * factor).coerceIn(10f, 2000f)
+        it.copy(compassState = current.copy(radius = next))
+    }
+
+    fun moveProtractor(newPos: Point) = updateTool {
+        it.copy(protractorState = it.protractorState?.copy(position = newPos) ?: ProtractorState(newPos, angle = 0f))
+    }
+    fun rotateProtractor(newAngle: Float) = updateTool {
+        it.copy(protractorState = it.protractorState?.copy(angle = newAngle))
+    }
+
+    // --- Drawing (Pen / Polyline) ---
+    fun onDown(p: Point) {
+        pushUndo()
+        _state.update { it.copy(currentPolyline = listOf(p)) }
+    }
+
+    fun onMove(p: Point) = _state.update {
+        it.copy(currentPolyline = it.currentPolyline + p)
+    }
+
     fun onUp() {
         val cur = _state.value.currentPolyline
-        if (cur.size >= 2) {
-            _state.update { it.copy(shapes = it.shapes + Polyline("LINE",cur), currentPolyline = emptyList()) }
-        } else {
-            _state.update { it.copy(currentPolyline = emptyList()) }
+        _state.update {
+            if (cur.size >= 2) it.copy(
+                shapes = it.shapes + Polyline("LINE", cur),
+                currentPolyline = emptyList()
+            ) else it.copy(currentPolyline = emptyList())
         }
     }
 
-    // --- Undo / Redo ---
+    // --- Undo/Redo ---
     fun undo() {
         if (undoStack.isNotEmpty()) {
             val prev = undoStack.removeLast()
@@ -100,6 +127,7 @@ class DrawingViewModel @Inject constructor(
             _state.value = prev
         } else messageEmit("Nothing to undo")
     }
+
     fun redo() {
         if (redoStack.isNotEmpty()) {
             val next = redoStack.removeLast()
@@ -108,57 +136,37 @@ class DrawingViewModel @Inject constructor(
         } else messageEmit("Nothing to redo")
     }
 
-    fun updateRulerLength(newLength: Float) {
-        _state.update { current ->
-            val ruler = current.rulerState
-            if (ruler != null) current.copy(
-                rulerState = ruler.copy(length = newLength)
-            ) else current
-        }
-    }
-
-    fun updateProtractorAngle(newAngle: Float) {
-        _state.update { current ->
-            val protractor = current.protractorState
-            if (protractor != null) current.copy(
-                protractorState = protractor.copy(angle = newAngle)
-            ) else current
-        }
-    }
-
-    fun updateCompassRadius(newRadius: Float) {
-        _state.update { current ->
-            val compass = current.compassState
-            if (compass != null) current.copy(
-                compassState = compass.copy(radius = newRadius)
-            ) else current
-        }
-    }
-
-    fun updateSetSquareSize(newSize: Float) {
-        _state.update { current ->
-            val setSquare = current.setSquareState
-            if (setSquare != null) current.copy(
-                setSquareState = setSquare.copy(size = newSize)
-            ) else current
-        }
-    }
-
     private fun pushUndo() {
         undoStack.addLast(_state.value.copy())
         if (undoStack.size > maxHistory) undoStack.removeFirst()
         redoStack.clear()
     }
 
-    // dynamic snap radius (uses current zoom)
+    // --- Zoom / Pan ---
+    fun zoomBy(factor: Float) {
+        _zoom *= factor
+        _state.update { cur -> cur.copy(zoomLevel = cur.zoomLevel * factor) }
+    }
+
+    fun panBy(dx: Float, dy: Float) {
+        panX += dx
+        panY += dy
+    }
+
     fun currentSnapRadiusPx(): Float = max(8f, 40f / _zoom)
 
+    // --- UI Events ---
     fun messageEmit(msg: String) = viewModelScope.launch { _message.emit(msg) }
 
-    // --- Export ---
-    suspend fun exportBitmap(): Uri? {
-        return repo.exportDrawing(_state.value.shapes).apply {
-            messageEmit("Exported")
-        }
+    // --- Export & Share ---
+    suspend fun exportBitmap(): Uri? = repo.exportDrawing(_state.value.shapes)
+
+    suspend fun share() {
+        exportBitmap()?.let { _share.emit(it) }
+    }
+
+    // --- Utility ---
+    private inline fun updateTool(update: (DrawingUiState) -> DrawingUiState) {
+        _state.update(update)
     }
 }
