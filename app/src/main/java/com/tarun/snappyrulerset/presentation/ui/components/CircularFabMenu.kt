@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DonutLarge
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -29,8 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.tarun.snappyrulerset.domain.model.ActiveTool
+import com.tarun.snappyrulerset.domain.model.FabMenuItem
 import com.tarun.snappyrulerset.presentation.viewmodel.DrawingViewModel
 import kotlinx.coroutines.launch
 import kotlin.math.cos
@@ -39,35 +42,40 @@ import kotlin.math.sin
 @Composable
 fun CircularToolFabMenu(
     vm: DrawingViewModel,
+    radius: Float = 150f,
+    itemSize: Dp = 48.dp,
+    mainFabSize: Dp = 56.dp
 ) {
     var expanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun selectedTool(tool: ActiveTool) {
-        vm.selectTool(tool)
-        expanded = !expanded
-    }
-
-    // List of tools
     val menuItems = listOf(
-        Triple(Icons.Default.Straighten, ActiveTool.RULER) {
-            selectedTool(ActiveTool.RULER)
+        FabMenuItem(Icons.Default.Straighten, "Ruler") {
+            vm.selectTool(ActiveTool.RULER)
         },
-        Triple(
-            Icons.Default.ChangeHistory,
-            ActiveTool.SET_SQUARE
-        ) { selectedTool(ActiveTool.SET_SQUARE) },
-        Triple(
-            Icons.Default.DonutLarge,
-            ActiveTool.PROTRACTOR
-        ) {
-            selectedTool(ActiveTool.PROTRACTOR)
+        FabMenuItem(Icons.Default.ChangeHistory, "Set Square") {
+            vm.selectTool(ActiveTool.SET_SQUARE)
         },
-        Triple(Icons.Default.Circle, ActiveTool.COMPASS) { selectedTool(ActiveTool.COMPASS) },
-        Triple(Icons.Default.Edit, ActiveTool.PEN) { selectedTool(ActiveTool.PEN) },
-        Triple(Icons.AutoMirrored.Filled.Undo, null) { vm.undo() },
-        Triple(Icons.AutoMirrored.Filled.Redo, null) { vm.redo() },
-        Triple(Icons.Default.Save, null) { scope.launch { vm.exportBitmap() } }
+        FabMenuItem(Icons.Default.DonutLarge, "Protractor") {
+            vm.selectTool(ActiveTool.PROTRACTOR)
+        },
+        FabMenuItem(Icons.Default.Circle, "Compass") {
+            vm.selectTool(ActiveTool.COMPASS)
+        },
+        FabMenuItem(Icons.Default.Edit, "Pen") {
+            vm.selectTool(ActiveTool.PEN)
+        },
+        FabMenuItem(Icons.AutoMirrored.Filled.Undo, "Undo") { vm.undo() },
+        FabMenuItem(Icons.AutoMirrored.Filled.Redo, "Redo") { vm.redo() },
+        FabMenuItem(Icons.Default.Save, "Save") {
+            scope.launch {
+                vm.exportBitmap()
+                vm.messageEmit("Exported")
+            }
+        },
+        FabMenuItem(Icons.Default.Share, "Share") {
+            scope.launch { vm.share() }
+        }
     )
 
     Box(
@@ -76,21 +84,24 @@ fun CircularToolFabMenu(
     ) {
         menuItems.forEachIndexed { index, item ->
             val angle = 180f / (menuItems.size - 1) * index
-            val offsetX by animateFloatAsState(
-                targetValue = if (expanded) -cos(Math.toRadians(angle.toDouble())).toFloat() * 150f else 0f
-            )
-            val offsetY by animateFloatAsState(
-                targetValue = if (expanded) -sin(Math.toRadians(angle.toDouble())).toFloat() * 150f else 0f
-            )
+
+            val targetX = if (expanded) -cos(Math.toRadians(angle.toDouble())).toFloat() * radius else 0f
+            val targetY = if (expanded) -sin(Math.toRadians(angle.toDouble())).toFloat() * radius else 0f
+
+            val offsetX by animateFloatAsState(targetValue = targetX)
+            val offsetY by animateFloatAsState(targetValue = targetY)
 
             FloatingActionButton(
-                onClick = { item.third() },
+                onClick = {
+                    item.onClick()
+                    expanded = false // collapse after selection
+                },
                 modifier = Modifier
                     .offset(x = offsetX.dp, y = offsetY.dp)
-                    .size(48.dp)
+                    .size(itemSize)
                     .alpha(if (expanded) 1f else 0f)
             ) {
-                Icon(item.first, contentDescription = null, tint = Color.White)
+                Icon(item.icon, contentDescription = item.label, tint = Color.White)
             }
         }
 
@@ -99,11 +110,11 @@ fun CircularToolFabMenu(
             onClick = { expanded = !expanded },
             modifier = Modifier
                 .padding(16.dp)
-                .size(56.dp)
+                .size(mainFabSize)
         ) {
             Icon(
                 if (expanded) Icons.Default.Close else Icons.Default.Add,
-                contentDescription = null
+                contentDescription = if (expanded) "Close" else "Menu"
             )
         }
     }

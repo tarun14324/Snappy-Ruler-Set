@@ -7,6 +7,8 @@ package com.tarun.snappyrulerset.utils
 
 import android.content.Context
 import com.tarun.snappyrulerset.domain.model.Point
+import com.tarun.snappyrulerset.domain.model.SnapResult
+import com.tarun.snappyrulerset.domain.model.SnapType
 import com.tarun.snappyrulerset.domain.model.state.DrawingUiState
 import com.tarun.snappyrulerset.presentation.viewmodel.DrawingViewModel
 import kotlin.math.*
@@ -24,18 +26,41 @@ object SnapEngine {
      * Combined snapping. Priority: point > angle > grid.
      * Uses vm.currentSnapRadiusPx() (dynamic with zoom).
      */
-    fun snapPointToAll(input: Point, state: DrawingUiState, context: Context, vm: DrawingViewModel): Point {
+    fun snapPointToAll(
+        input: Point,
+        state: DrawingUiState,
+        context: Context,
+        vm: DrawingViewModel
+    ): SnapResult {
+        var snapType = SnapType.NONE
         var p = input
-        // 1) Snap to nearby points with dynamic radius from VM
         val radius = try { vm.currentSnapRadiusPx() } catch (_: Throwable) { 32f }
-        p = snapToNearbyPoints(p, state, radius)
-        // 2) Angle snap relative to last polyline point if any
+
+        // 1) Snap to nearby points
+        val pointSnap = snapToNearbyPoints(p, state, radius)
+        if (pointSnap != p) {
+            p = pointSnap
+            snapType = SnapType.POINT
+        }
+
+        // 2) Snap to common angles
         val base = state.currentPolyline.lastOrNull() ?: p
-        p = snapToCommonAngles(base, p, threshold = 7f)
-        // 3) Grid snap
-        p = snapToGrid(p, context)
-        return p
+        val angleSnap = snapToCommonAngles(base, p, threshold = 7f)
+        if (angleSnap != p) {
+            p = angleSnap
+            snapType = SnapType.ANGLE
+        }
+
+        // 3) Snap to grid
+        val gridSnap = snapToGrid(p, context)
+        if (gridSnap != p) {
+            p = gridSnap
+            snapType = SnapType.GRID
+        }
+
+        return SnapResult(p, snapType)
     }
+
 
     fun snapToGrid(p: Point, context: Context, mm: Float = 5f): Point {
         val step = gridSizePx(context, mm)
