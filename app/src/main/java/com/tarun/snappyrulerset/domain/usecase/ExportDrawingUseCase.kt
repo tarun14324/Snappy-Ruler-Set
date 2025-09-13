@@ -1,6 +1,5 @@
 package com.tarun.snappyrulerset.domain.usecase
 
-import android.content.Context
 import android.net.Uri
 import com.tarun.snappyrulerset.domain.model.Polyline
 import com.tarun.snappyrulerset.domain.repository.DrawingRepository

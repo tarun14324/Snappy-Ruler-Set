@@ -10,8 +10,3 @@ data class Polyline(
     val points: List<Point>,
 ) : Shape
 
-
-data class CircleShape(
-    override val id: String,
-    val circle: Circle,
-) : Shape

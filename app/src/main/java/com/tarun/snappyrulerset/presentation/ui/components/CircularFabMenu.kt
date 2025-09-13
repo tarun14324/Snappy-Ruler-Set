@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DonutLarge
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.tarun.snappyrulerset.domain.model.ActiveTool
 import com.tarun.snappyrulerset.presentation.viewmodel.DrawingViewModel
@@ -42,10 +44,18 @@ fun CircularToolFabMenu(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     fun selectedTool(tool: ActiveTool) {
         vm.selectTool(tool)
         expanded = !expanded
+    }
+
+    fun share() {
+        scope.launch {
+            vm.saveDrawing()
+            vm.messageEmit("saved successfully")
+        }
     }
 
     // List of tools
@@ -67,7 +77,8 @@ fun CircularToolFabMenu(
         Triple(Icons.Default.Edit, ActiveTool.PEN) { selectedTool(ActiveTool.PEN) },
         Triple(Icons.AutoMirrored.Filled.Undo, null) { vm.undo() },
         Triple(Icons.AutoMirrored.Filled.Redo, null) { vm.redo() },
-        Triple(Icons.Default.Save, null) { scope.launch { vm.exportBitmap() } }
+        Triple(Icons.Default.Save, null) { scope.launch { share() } },
+        Triple(Icons.Default.Share, null) { scope.launch { vm.exportAndShare(context)} }
     )
 
     Box(
